@@ -235,10 +235,121 @@ def print_summary(results):
                 avg_mse = np.mean(mses) if mses else None
                 print(f"{mode:20s}: 平均时间 = {avg_time:.6f}s, 平均MSE = {avg_mse:.2e}")
 
+def save_dataset_npy(test_points, function_values, laplacian_values, biharmonic_values, 
+                     model_info, filename='dataset.npy'):
+    """
+    保存测试数据集为.npy格式
+    
+    Args:
+        test_points: 测试点坐标 (numpy array, shape: [n_samples, input_dim])
+        function_values: 函数值 (numpy array, shape: [n_samples])
+        laplacian_values: 拉普拉斯算子值 (numpy array, shape: [n_samples])
+        biharmonic_values: 双调和算子值 (numpy array, shape: [n_samples])
+        model_info: 模型信息列表（每个采样点对应的模型配置）
+        filename: 保存文件名
+    """
+    dataset = {
+        'test_points': np.array(test_points),
+        'function_values': np.array(function_values),
+        'laplacian_values': np.array(laplacian_values),
+        'biharmonic_values': np.array(biharmonic_values),
+        'model_info': model_info
+    }
+    np.save(filename, dataset)
+    print(f"数据集已保存到 {filename}")
+
+def save_dataset_csv(test_points, function_values, laplacian_values, biharmonic_values,
+                     model_info, filename='dataset.csv'):
+    """
+    保存测试数据集为CSV格式（便于查看）
+    
+    Args:
+        test_points: 测试点坐标 (numpy array, shape: [n_samples, input_dim])
+        function_values: 函数值 (numpy array, shape: [n_samples])
+        laplacian_values: 拉普拉斯算子值 (numpy array, shape: [n_samples])
+        biharmonic_values: 双调和算子值 (numpy array, shape: [n_samples])
+        model_info: 模型信息列表
+        filename: 保存文件名
+    """
+    import csv
+    import numpy as np
+    
+    test_points = np.asarray(test_points)
+    function_values = np.asarray(function_values)
+    laplacian_values = np.asarray(laplacian_values)
+    biharmonic_values = np.asarray(biharmonic_values)
+    
+    n_samples, input_dim = test_points.shape
+    
+    with open(filename, 'w', newline='') as csvfile:
+        # 构建字段名：x_0, x_1, ..., x_n, f(x), laplacian, biharmonic, model, input_dim, hidden_dim, num_layers, activation, precision
+        fieldnames = [f'x_{i}' for i in range(input_dim)] + ['f(x)', 'laplacian', 'biharmonic', 
+                                                              'model', 'input_dim', 'hidden_dim', 'num_layers', 'activation', 'precision']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for i in range(n_samples):
+            row = {f'x_{j}': test_points[i, j] for j in range(input_dim)}
+            row['f(x)'] = function_values[i]
+            row['laplacian'] = laplacian_values[i]
+            row['biharmonic'] = biharmonic_values[i]
+            # 添加模型信息
+            if i < len(model_info):
+                info = model_info[i]
+                row['model'] = info.get('model', '')
+                row['input_dim'] = info.get('input_dim', '')
+                row['hidden_dim'] = info.get('hidden_dim', '')
+                row['num_layers'] = info.get('num_layers', '')
+                row['activation'] = info.get('activation', '')
+                row['precision'] = info.get('precision', '')
+            writer.writerow(row)
+    
+    print(f"数据集已保存到 {filename} (CSV格式)")
+
 def run_benchmark():
     """运行完整基准测试"""
     print("开始性能评估...")
     print("=" * 80)
+    
+    # 用于收集数据集
+    dataset_points = []
+    dataset_f_values = []
+    dataset_lap_values = []
+    dataset_bih_values = []
+    dataset_model_info = []
+    
+    # 收集代表性测试点（每个配置一个）
+    def collect_sample_data(model_name, input_dim, hidden_dim, num_layers, activation, precision):
+        """收集单个配置的测试数据"""
+        torch.manual_seed(42)  # 固定随机种子
+        dtype = torch.float32 if precision == 'float32' else torch.float64
+        model = build_model(model_name, input_dim, hidden_dim, num_layers, activation)
+        if dtype == torch.float64:
+            model = model.double()
+        
+        # 生成测试点
+        x = torch.randn(1, input_dim, dtype=dtype, requires_grad=True)
+        
+        # 计算函数值
+        f_x = model(x).item()
+        
+        # 计算算子值（使用基准模式）
+        lap_value = laplacian_operator(model, x.clone(), mode='reverse_reverse').item()
+        bih_value = biharmonic_operator(model, x.clone(), mode='reverse_reverse').item()
+        
+        # 保存
+        dataset_points.append(x.detach().cpu().numpy().flatten())
+        dataset_f_values.append(f_x)
+        dataset_lap_values.append(lap_value)
+        dataset_bih_values.append(bih_value)
+        dataset_model_info.append({
+            'model': model_name,
+            'input_dim': input_dim,
+            'hidden_dim': hidden_dim,
+            'num_layers': num_layers,
+            'activation': activation,
+            'precision': precision
+        })
     
     results = evaluate_performance(verbose=True)
     
@@ -250,8 +361,18 @@ def run_benchmark():
     save_results_to_csv(results, "results.csv")
     print("✓ 结果已保存到 results.csv")
     
+    # 保存数据集
+    if dataset_points:
+        from utils import save_dataset_npy, save_dataset_csv
+        print("\n保存测试数据集...")
+        save_dataset_npy(dataset_points, dataset_f_values, dataset_lap_values, 
+                        dataset_bih_values, dataset_model_info, 'dataset.npy')
+        save_dataset_csv(dataset_points, dataset_f_values, dataset_lap_values,
+                       dataset_bih_values, dataset_model_info, 'dataset.csv')
+        print("✓ 数据集已保存")
+    
     # 绘制图表
-    print("生成性能图表...")
+    print("\n生成性能图表...")
     plot_performance(results)
     print("✓ 图表已保存到 performance_plot.png")
     

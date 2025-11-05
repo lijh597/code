@@ -120,3 +120,74 @@ def calculate_mse(predictions, targets):
     # 计算MSE
     mse = np.mean((predictions - targets) ** 2)
     return float(mse)
+
+def save_dataset_npy(test_points, function_values, laplacian_values, biharmonic_values, 
+                     model_info, filename='dataset.npy'):
+    """
+    保存测试数据集为.npy格式
+    
+    Args:
+        test_points: 测试点坐标 (numpy array, shape: [n_samples, input_dim])
+        function_values: 函数值 (numpy array, shape: [n_samples])
+        laplacian_values: 拉普拉斯算子值 (numpy array, shape: [n_samples])
+        biharmonic_values: 双调和算子值 (numpy array, shape: [n_samples])
+        model_info: 模型信息列表（每个采样点对应的模型配置）
+        filename: 保存文件名
+    """
+    dataset = {
+        'test_points': np.array(test_points),
+        'function_values': np.array(function_values),
+        'laplacian_values': np.array(laplacian_values),
+        'biharmonic_values': np.array(biharmonic_values),
+        'model_info': model_info
+    }
+    np.save(filename, dataset)
+    print(f"数据集已保存到 {filename}")
+
+def save_dataset_csv(test_points, function_values, laplacian_values, biharmonic_values,
+                     model_info, filename='dataset.csv'):
+    """
+    保存测试数据集为CSV格式（便于查看）
+    
+    Args:
+        test_points: 测试点坐标 (numpy array, shape: [n_samples, input_dim])
+        function_values: 函数值 (numpy array, shape: [n_samples])
+        laplacian_values: 拉普拉斯算子值 (numpy array, shape: [n_samples])
+        biharmonic_values: 双调和算子值 (numpy array, shape: [n_samples])
+        model_info: 模型信息列表
+        filename: 保存文件名
+    """
+    import csv
+    import numpy as np
+    
+    test_points = np.asarray(test_points)
+    function_values = np.asarray(function_values)
+    laplacian_values = np.asarray(laplacian_values)
+    biharmonic_values = np.asarray(biharmonic_values)
+    
+    n_samples, input_dim = test_points.shape
+    
+    with open(filename, 'w', newline='') as csvfile:
+        # 构建字段名：x_0, x_1, ..., x_n, f(x), laplacian, biharmonic, model, input_dim, hidden_dim, num_layers, activation, precision
+        fieldnames = [f'x_{i}' for i in range(input_dim)] + ['f(x)', 'laplacian', 'biharmonic', 
+                                                              'model', 'input_dim', 'hidden_dim', 'num_layers', 'activation', 'precision']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for i in range(n_samples):
+            row = {f'x_{j}': test_points[i, j] for j in range(input_dim)}
+            row['f(x)'] = function_values[i]
+            row['laplacian'] = laplacian_values[i]
+            row['biharmonic'] = biharmonic_values[i]
+            # 添加模型信息
+            if i < len(model_info):
+                info = model_info[i]
+                row['model'] = info.get('model', '')
+                row['input_dim'] = info.get('input_dim', '')
+                row['hidden_dim'] = info.get('hidden_dim', '')
+                row['num_layers'] = info.get('num_layers', '')
+                row['activation'] = info.get('activation', '')
+                row['precision'] = info.get('precision', '')
+            writer.writerow(row)
+    
+    print(f"数据集已保存到 {filename} (CSV格式)")

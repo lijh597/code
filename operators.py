@@ -79,16 +79,31 @@ def biharmonic_operator(model, x, mode="reverse_reverse"):
     计算双调和算子 ∇⁴f = ∇²(∇²f)
     实现要点：
     1) 先按给定 mode 计算 g(x)=∇²f(x)，确保 g 对 x 有计算图(create_graph=True)。
-    2) 再对 g(x) 用“反向+反向”计算 ∇²g(x) 的迹（即对角和）。
+    2) 再对 g(x) 用"反向+反向"计算 ∇²g(x) 的迹（即对角和）。
     """
     if not x.requires_grad:
         x = x.clone().detach().requires_grad_(True)
 
     # 第一次拉普拉斯：按指定 mode 计算 g(x)=∇²f(x)
+    # 注意：确保 x 在计算前有 requires_grad=True 且连接计算图
     g = laplacian_operator(model, x, mode=mode)  # 标量，且应与 x 有依赖
-
-    # 第二次拉普拉斯：对 g(x) 再做一次“反向+反向”（迹）
-    grad_g = torch.autograd.grad(g, x, create_graph=True)[0]  # ∇g
+    
+    # 验证 g 是否连接到 x 的计算图
+    if not g.requires_grad:
+        # 如果 g 没有梯度，说明计算图断开，需要重新计算
+        # 这种情况不应该发生，但如果发生了，我们需要重新构建
+        raise RuntimeError(f"Laplacian result for mode {mode} is not connected to computation graph")
+    
+    # 第二次拉普拉斯：对 g(x) 再做一次"反向+反向"（迹）
+    # 确保 g 可以关于 x 求导
+    try:
+        grad_g = torch.autograd.grad(g, x, create_graph=True, retain_graph=True)[0]  # ∇g
+    except RuntimeError as e:
+        # 如果无法求导，说明计算图断开
+        raise RuntimeError(f"Cannot compute gradient of laplacian for mode {mode}: {e}. "
+                          f"This may indicate that the laplacian_operator did not properly "
+                          f"create a computation graph.")
+    
     biharmonic = 0
     for i in range(x.shape[1]):
         grad_i = grad_g[:, i]

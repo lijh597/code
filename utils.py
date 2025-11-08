@@ -6,9 +6,11 @@ def save_results_to_csv(results, filename):
     """将结果保存为CSV文件"""
     import csv
     with open(filename, 'w', newline='') as csvfile:
-        fieldnames = ['model', 'input_dim', 'hidden_dim', 'num_layers', 'activation', 
-                      'precision', 'operator', 'mode', 'time', 'value', 'mse',
-                      'baseline_f_time', 'baseline_grad_time']
+        fieldnames = [
+            'framework', 'model', 'input_dim', 'hidden_dim', 'num_layers', 'activation', 
+            'precision', 'operator', 'mode', 'time', 'value', 'mse',
+            'baseline_f_time', 'baseline_grad_time'
+        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
@@ -148,14 +150,7 @@ def save_dataset_csv(test_points, function_values, laplacian_values, biharmonic_
                      model_info, filename='dataset.csv'):
     """
     保存测试数据集为CSV格式（便于查看）
-    
-    Args:
-        test_points: 测试点坐标 (numpy array, shape: [n_samples, input_dim])
-        function_values: 函数值 (numpy array, shape: [n_samples])
-        laplacian_values: 拉普拉斯算子值 (numpy array, shape: [n_samples])
-        biharmonic_values: 双调和算子值 (numpy array, shape: [n_samples])
-        model_info: 模型信息列表
-        filename: 保存文件名
+    注意：不同配置的input_dim可能不同，需要统一处理
     """
     import csv
     import numpy as np
@@ -165,17 +160,23 @@ def save_dataset_csv(test_points, function_values, laplacian_values, biharmonic_
     laplacian_values = np.asarray(laplacian_values)
     biharmonic_values = np.asarray(biharmonic_values)
     
-    n_samples, input_dim = test_points.shape
+    # 找到最大维度，统一字段名
+    max_dim = max([len(pt) for pt in test_points]) if len(test_points) > 0 else 0
     
     with open(filename, 'w', newline='') as csvfile:
-        # 构建字段名：x_0, x_1, ..., x_n, f(x), laplacian, biharmonic, model, input_dim, hidden_dim, num_layers, activation, precision
-        fieldnames = [f'x_{i}' for i in range(input_dim)] + ['f(x)', 'laplacian', 'biharmonic', 
+        # 构建字段名：x_0, x_1, ..., x_max_dim, f(x), laplacian, biharmonic, model, input_dim, ...
+        fieldnames = [f'x_{i}' for i in range(max_dim)] + ['f(x)', 'laplacian', 'biharmonic', 
                                                               'model', 'input_dim', 'hidden_dim', 'num_layers', 'activation', 'precision']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         
-        for i in range(n_samples):
-            row = {f'x_{j}': test_points[i, j] for j in range(input_dim)}
+        for i in range(len(test_points)):
+            row = {}
+            # 填充x坐标（不足的用空值）
+            pt = test_points[i]
+            for j in range(max_dim):
+                row[f'x_{j}'] = pt[j] if j < len(pt) else ''
+            
             row['f(x)'] = function_values[i]
             row['laplacian'] = laplacian_values[i]
             row['biharmonic'] = biharmonic_values[i]

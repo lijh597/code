@@ -1,54 +1,179 @@
 import torch
 import time
 import numpy as np
-from models import MLP, ResNet
+from models_pytorch import MLP, ResNet
 from operators import laplacian_operator, biharmonic_operator
-from config import INPUT_DIMS, HIDDEN_DIMS, HIDDEN_LAYERS, ACTIVATIONS, NUM_RUNS, AD_MODES, PRECISIONS
+from config import INPUT_DIMS, HIDDEN_DIMS, HIDDEN_LAYERS, ACTIVATIONS, NUM_RUNS, AD_MODES, PRECISIONS, CURRENT_FRAMEWORKS, FRAMEWORKS
 from utils import save_results_to_csv, plot_performance, calculate_mse
 
-def measure_baselines(model, x):
+# 在文件开头添加框架选择逻辑
+from config import CURRENT_FRAMEWORKS, FRAMEWORKS
+
+def get_framework_imports(framework_name):
+    """根据框架名称返回对应的导入"""
+    if framework_name == 'pytorch':
+        from models_pytorch import MLP, ResNet
+        from operators_pytorch import laplacian_operator, biharmonic_operator
+        import torch
+        return {
+            'MLP': MLP,
+            'ResNet': ResNet,
+            'laplacian_operator': laplacian_operator,
+            'biharmonic_operator': biharmonic_operator,
+            'torch': torch,
+            'framework': 'pytorch'
+        }
+    elif framework_name == 'tensorflow':
+        from models_tensorflow import MLP, ResNet
+        from operators_tensorflow import laplacian_operator, biharmonic_operator
+        import tensorflow as tf
+        return {
+            'MLP': MLP,
+            'ResNet': ResNet,
+            'laplacian_operator': laplacian_operator,
+            'biharmonic_operator': biharmonic_operator,
+            'tf': tf,
+            'framework': 'tensorflow'
+        }
+    elif framework_name == 'jax':
+        from models_jax import MLP, ResNet
+        from operators_jax import laplacian_operator, biharmonic_operator
+        import jax.numpy as jnp
+        return {
+            'MLP': MLP,
+            'ResNet': ResNet,
+            'laplacian_operator': laplacian_operator,
+            'biharmonic_operator': biharmonic_operator,
+            'jnp': jnp,
+            'framework': 'jax'
+        }
+    else:
+        raise ValueError(f"Unknown framework: {framework_name}")
+
+def measure_baselines(model, x, framework_name='pytorch'):
     """
     返回: f_time, grad_time
     - f_time: 计算 f(x) 的时间
     - grad_time: 计算一阶导 ∇f(x) 的时间（以标量 f.sum() 反向为准）
+    
+    Args:
+        model: 神经网络模型
+        x: 输入数据
+        framework_name: 框架名称 ('pytorch', 'tensorflow', 'jax')
     """
-    x = x.requires_grad_(True)
-    start = time.time()
-    fx = model(x)
-    f_time = time.time() - start
+    import time
+    
+    if framework_name == 'pytorch':
+        x = x.requires_grad_(True)
+        start = time.time()
+        fx = model(x)
+        f_time = time.time() - start
 
-    start = time.time()
-    grad = torch.autograd.grad(fx.sum(), x, retain_graph=False, create_graph=False)[0]
-    grad_time = time.time() - start
-    return float(f_time), float(grad_time)
+        start = time.time()
+        grad = torch.autograd.grad(fx.sum(), x, retain_graph=False, create_graph=False)[0]
+        grad_time = time.time() - start
+        return float(f_time), float(grad_time)
+    
+    elif framework_name == 'tensorflow':
+        import tensorflow as tf
+        with tf.GradientTape() as tape:
+            tape.watch(x)
+            start = time.time()
+            fx = model(x)
+            f_time = time.time() - start
+        
+        start = time.time()
+        grad = tape.gradient(tf.reduce_sum(fx), x)
+        grad_time = time.time() - start
+        return float(f_time), float(grad_time)
+    
+    elif framework_name == 'jax':
+        from jax import grad
+        import jax.numpy as jnp
+        
+        def f(x):
+            return model(x).sum()
+        
+        start = time.time()
+        fx = model(x)
+        f_time = time.time() - start
+        
+        start = time.time()
+        grad_fn = grad(f)
+        grad_val = grad_fn(x)
+        grad_time = time.time() - start
+        return float(f_time), float(grad_time)
+    
+    else:
+        raise ValueError(f"Unknown framework: {framework_name}")
 
-def evaluate_single_config(model, x, operator='laplacian', dtype=torch.float32):
+def evaluate_single_config(model, x, operator='laplacian', dtype=None, framework_name='pytorch',
+                          laplacian_operator=None, biharmonic_operator=None):
     """
-    评估单个配置下的所有AD模式
+    评估单个配置下的所有AD模式（支持多框架）
     
     Args:
         model: 神经网络模型
         x: 输入数据
         operator: 算子类型 ('laplacian' 或 'biharmonic')
-        dtype: 数据类型
+        dtype: 数据类型（框架特定）
+        framework_name: 框架名称 ('pytorch', 'tensorflow', 'jax')
+        laplacian_operator: 拉普拉斯算子函数
+        biharmonic_operator: 双调和算子函数
     
     Returns:
         results: 包含所有模式结果的列表
     """
     results = []
     
-    # 设置数据类型
-    if dtype == torch.float64:
-        model = model.double()
-        x = x.double()
-    else:
-        model = model.float()
-        x = x.float()
+    # 根据框架设置数据类型和准备输入
+    if framework_name == 'pytorch':
+        import torch
+        if dtype is None:
+            dtype = torch.float32
+        if dtype == torch.float64:
+            model = model.double()
+            x = x.double()
+        else:
+            model = model.float()
+            x = x.float()
+        x.requires_grad_(True)
+        
+        def to_numpy(value):
+            return value.item() if hasattr(value, 'item') else float(value)
+        
+        def clone_input(x):
+            return x.clone()
     
-    x.requires_grad_(True)
+    elif framework_name == 'tensorflow':
+        import tensorflow as tf
+        if dtype is None:
+            dtype = tf.float32
+        # TensorFlow 模型会自动处理数据类型
+        
+        def to_numpy(value):
+            return float(value.numpy())
+        
+        def clone_input(x):
+            return tf.Variable(x, trainable=True)
+    
+    elif framework_name == 'jax':
+        import jax.numpy as jnp
+        if dtype is None:
+            dtype = jnp.float32
+        x = jnp.array(x, dtype=dtype)
+        
+        def to_numpy(value):
+            return float(value)
+        
+        def clone_input(x):
+            return jnp.array(x)
+    
+    else:
+        raise ValueError(f"Unknown framework: {framework_name}")
     
     # 基线时间（函数值与一阶导）
-    baseline_f_time, baseline_grad_time = measure_baselines(model, x)
+    baseline_f_time, baseline_grad_time = measure_baselines(model, x, framework_name)
 
     # 1. 基准模式（reverse_reverse）
     baseline_mode = "reverse_reverse"
@@ -56,10 +181,10 @@ def evaluate_single_config(model, x, operator='laplacian', dtype=torch.float32):
 
     try:
         start_time = time.time()
-        baseline_value = baseline_func(model, x.clone(), mode=baseline_mode)
+        baseline_value = baseline_func(model, clone_input(x), mode=baseline_mode)
         baseline_time = time.time() - start_time
 
-        baseline_value_item = baseline_value.item() if baseline_value is not None else None
+        baseline_value_item = to_numpy(baseline_value) if baseline_value is not None else None
 
         results.append({
             'mode': baseline_mode,
@@ -74,9 +199,9 @@ def evaluate_single_config(model, x, operator='laplacian', dtype=torch.float32):
         # 2. 其他模式
         for mode in AD_MODES[1:]:
             start_time = time.time()
-            value = baseline_func(model, x.clone(), mode=mode)
+            value = baseline_func(model, clone_input(x), mode=mode)
             comp_time = time.time() - start_time
-            value_item = value.item() if value is not None else None
+            value_item = to_numpy(value) if value is not None else None
             mse = calculate_mse(value_item, baseline_value_item) if (baseline_value_item is not None and value_item is not None) else None
 
             results.append({
@@ -90,120 +215,287 @@ def evaluate_single_config(model, x, operator='laplacian', dtype=torch.float32):
             })
     except Exception as e:
         print(f"  ✗ 基准模式计算失败: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
     return results
 
-def evaluate_performance(verbose=True):
+def evaluate_performance(frameworks=None, verbose=True, collect_dataset=True):
     """
-    性能评估主函数
+    性能评估主函数（支持多框架）
     
     Args:
+        frameworks: 要测试的框架列表，如果为None则使用CURRENT_FRAMEWORKS
         verbose: 是否打印详细输出
+        collect_dataset: 是否收集数据集（用于保存）
     
     Returns:
-        results: 所有评估结果的列表
+        results: 所有评估结果的列表（包含framework字段）
+        dataset_data: 数据集信息（如果collect_dataset=True）
     """
-    results = []
-    total_configs = 0
-
-    # 全量参数
-    test_configs = {
-        'input_dims': INPUT_DIMS,          # 全量
-        'hidden_dims': HIDDEN_DIMS,        # 全量
-        'num_layers': HIDDEN_LAYERS,       # 全量
-        'activations': ACTIVATIONS,        # 全量
-        'precisions': PRECISIONS,          # float32/float64
+    if frameworks is None:
+        frameworks = CURRENT_FRAMEWORKS
+    
+    all_results = []
+    all_dataset_data = {
+        'points': [],
+        'f_values': [],
+        'lap_values': [],
+        'bih_values': [],
+        'model_info': []
     }
+    
+    # 对每个框架分别评估
+    for framework_name in frameworks:
+        if verbose:
+            print(f"\n{'='*80}")
+            print(f"测试框架: {framework_name.upper()}")
+            print(f"{'='*80}")
+        
+        # 获取框架特定的导入
+        fw_imports = get_framework_imports(framework_name)
+        MLP = fw_imports['MLP']
+        ResNet = fw_imports['ResNet']
+        laplacian_operator = fw_imports['laplacian_operator']
+        biharmonic_operator = fw_imports['biharmonic_operator']
+        
+        # 根据框架选择数据类型和随机数生成
+        if framework_name == 'pytorch':
+            torch = fw_imports['torch']
+            def randn(shape, dtype):
+                return torch.randn(shape, dtype=dtype, requires_grad=True)
+            def manual_seed(seed):
+                torch.manual_seed(seed)
+        elif framework_name == 'tensorflow':
+            tf = fw_imports['tf']
+            def randn(shape, dtype):
+                return tf.Variable(tf.random.normal(shape, dtype=dtype))
+            def manual_seed(seed):
+                tf.random.set_seed(seed)
+        elif framework_name == 'jax':
+            jnp = fw_imports['jnp']
+            import jax.random as jr
+            key = jr.PRNGKey(42)
+            def randn(shape, dtype):
+                nonlocal key
+                key, subkey = jr.split(key)
+                return jr.normal(subkey, shape).astype(dtype)
+            def manual_seed(seed):
+                nonlocal key
+                key = jr.PRNGKey(seed)
+        
+        # 全量参数
+        test_configs = {
+            'input_dims': INPUT_DIMS,          # 全量
+            'hidden_dims': HIDDEN_DIMS,        # 全量
+            'num_layers': HIDDEN_LAYERS,       # 全量
+            'activations': ACTIVATIONS,        # 全量
+            'precisions': PRECISIONS,          # float32/float64
+        }
 
-    # 两类模型
-    def build_model(model_name, input_dim, hidden_dim, num_layers, activation):
-        if model_name == 'MLP':
-            return MLP(input_dim=input_dim,
-                       hidden_dims=[hidden_dim] * num_layers,
-                       output_dim=1,
-                       activation=activation)
-        elif model_name == 'ResNet':
-            # 复用 hidden_dims 作为每层宽度
-            return ResNet(input_dim=input_dim,
-                          hidden_dims=[hidden_dim] * num_layers,
-                          output_dim=1,
-                          activation=activation)
-        else:
-            raise ValueError(f"Unknown model: {model_name}")
+        # 两类模型
+        def build_model(model_name, input_dim, hidden_dim, num_layers, activation):
+            if framework_name == 'jax':
+                # JAX/Flax 模型需要初始化参数
+                import jax.numpy as jnp
+                import jax.random as jr
+                
+                # 创建模型实例
+                if model_name == 'MLP':
+                    model_def = MLP(
+                        hidden_dims=[hidden_dim] * num_layers,
+                        output_dim=1,
+                        activation=activation
+                    )
+                elif model_name == 'ResNet':
+                    model_def = ResNet(
+                        hidden_dims=[hidden_dim] * num_layers,
+                        output_dim=1,
+                        activation=activation
+                    )
+                else:
+                    raise ValueError(f"Unknown model: {model_name}")
+                
+                # 初始化参数（使用 dummy input）
+                key = jr.PRNGKey(42)
+                dummy_input = jnp.ones((1, input_dim), dtype=jnp.float32)
+                params = model_def.init(key, dummy_input)
 
-    for model_name in ['MLP', 'ResNet']:
-        for input_dim in test_configs['input_dims']:
-            for hidden_dim in test_configs['hidden_dims']:
-                for num_layers in test_configs['num_layers']:
-                    for activation in test_configs['activations']:
-                        for precision in test_configs['precisions']:
-                            dtype = torch.float32 if precision == 'float32' else torch.float64
+                # 返回一个可调用的模型函数
+                def model_fn(x):
+                    return model_def.apply(params, x)
+                
+                return model_fn
+            else:
+                # PyTorch 和 TensorFlow 模型直接返回
+                if model_name == 'MLP':
+                    return MLP(input_dim=input_dim,
+                               hidden_dims=[hidden_dim] * num_layers,
+                               output_dim=1,
+                               activation=activation)
+                elif model_name == 'ResNet':
+                    return ResNet(input_dim=input_dim,
+                                  hidden_dims=[hidden_dim] * num_layers,
+                                  output_dim=1,
+                                  activation=activation)
+                else:
+                    raise ValueError(f"Unknown model: {model_name}")
 
-                            if verbose:
-                                print(f"测试配置: {model_name}, dim={input_dim}, hidden={hidden_dim}, "
-                                      f"layers={num_layers}, activation={activation}, precision={precision}")
+        for model_name in ['MLP', 'ResNet']:
+            for input_dim in test_configs['input_dims']:
+                for hidden_dim in test_configs['hidden_dims']:
+                    for num_layers in test_configs['num_layers']:
+                        for activation in test_configs['activations']:
+                            for precision in test_configs['precisions']:
+                                # 根据框架设置 dtype
+                                if framework_name == 'pytorch':
+                                    import torch
+                                    dtype = torch.float32 if precision == 'float32' else torch.float64
+                                elif framework_name == 'tensorflow':
+                                    import tensorflow as tf
+                                    dtype = tf.float32 if precision == 'float32' else tf.float64
+                                elif framework_name == 'jax':
+                                    import jax.numpy as jnp
+                                    dtype = jnp.float32 if precision == 'float32' else jnp.float64
 
-                            # 多次运行取均值
-                            lap_runs, bih_runs = [], []
-                            for _ in range(NUM_RUNS):
-                                torch.manual_seed(42)
-                                model = build_model(model_name, input_dim, hidden_dim, num_layers, activation)
-                                x = torch.randn(1, input_dim, dtype=dtype, requires_grad=True)
+                                if verbose:
+                                    print(f"测试配置: {model_name}, dim={input_dim}, hidden={hidden_dim}, "
+                                          f"layers={num_layers}, activation={activation}, precision={precision}")
 
-                                lap_runs.extend(evaluate_single_config(model, x, operator='laplacian', dtype=dtype))
-                                # 重新构建模型与 x，避免计算图残留与缓存影响
-                                model = build_model(model_name, input_dim, hidden_dim, num_layers, activation)
-                                x = torch.randn(1, input_dim, dtype=dtype, requires_grad=True)
-                                bih_runs.extend(evaluate_single_config(model, x, operator='biharmonic', dtype=dtype))
-
-                            # 聚合（时间取均值，value/mse 取均值）
-                            def aggregate(run_list):
-                                from collections import defaultdict
-                                buckets = defaultdict(list)
-                                for r in run_list:
-                                    key = (r['operator'], r['mode'])
-                                    buckets[key].append(r)
-                                out = []
-                                for (operator, mode), lst in buckets.items():
-                                    avg_time = float(np.mean([z['time'] for z in lst if z['time'] is not None]))
-                                    avg_val = float(np.mean([z['value'] for z in lst if z['value'] is not None])) if any(z['value'] is not None for z in lst) else None
-                                    avg_mse = float(np.mean([z['mse'] for z in lst if z['mse'] is not None])) if any(z['mse'] is not None for z in lst) else None
-                                    bf = float(np.mean([z['baseline_f_time'] for z in lst if z.get('baseline_f_time') is not None]))
-                                    bg = float(np.mean([z['baseline_grad_time'] for z in lst if z.get('baseline_grad_time') is not None]))
-                                    out.append({
-                                        'operator': operator,
-                                        'mode': mode,
-                                        'time': avg_time,
-                                        'value': avg_val,
-                                        'mse': avg_mse,
-                                        'baseline_f_time': bf,
-                                        'baseline_grad_time': bg,
+                                # 收集数据集（每个配置收集一个代表性测试点）
+                                if collect_dataset:
+                                    manual_seed(42)  # 固定随机种子
+                                    model_sample = build_model(model_name, input_dim, hidden_dim, num_layers, activation)
+                                    # 根据框架设置模型数据类型（如果需要）
+                                    if framework_name == 'pytorch':
+                                        if dtype == torch.float64:
+                                            model_sample = model_sample.double()
+                                    elif framework_name == 'tensorflow':
+                                        import tensorflow as tf
+                                        if dtype == tf.float64:
+                                            # TensorFlow 模型会自动处理数据类型，可能需要特殊处理
+                                            pass  # 或者根据需要进行转换
+                                    elif framework_name == 'jax':
+                                        import jax.numpy as jnp
+                                        if dtype == jnp.float64:
+                                            # JAX 模型会自动处理数据类型
+                                            pass
+                                    # TensorFlow 和 JAX 会自动处理数据类型，不需要手动转换
+                                    
+                                    x_sample = randn((1, input_dim), dtype)  # 添加 input_dim
+                                    if framework_name == 'pytorch':
+                                        f_x = model_sample(x_sample).item()
+                                        lap_value = laplacian_operator(model_sample, x_sample.clone(), mode='reverse_reverse').item()
+                                        bih_value = biharmonic_operator(model_sample, x_sample.clone(), mode='reverse_reverse').item()
+                                        all_dataset_data['points'].append(x_sample.detach().cpu().numpy().flatten())
+                                    elif framework_name == 'tensorflow':
+                                        import tensorflow as tf
+                                        f_x = float(tf.reduce_sum(model_sample(x_sample)).numpy())
+                                        lap_value = float(laplacian_operator(model_sample, tf.Variable(x_sample), mode='reverse_reverse').numpy())
+                                        bih_value = float(biharmonic_operator(model_sample, tf.Variable(x_sample), mode='reverse_reverse').numpy())
+                                        all_dataset_data['points'].append(x_sample.numpy().flatten())
+                                    elif framework_name == 'jax':
+                                        import jax.numpy as jnp
+                                        f_x = float(jnp.sum(model_sample(x_sample)))
+                                        lap_value = float(laplacian_operator(model_sample, x_sample, mode='reverse_reverse'))
+                                        bih_value = float(biharmonic_operator(model_sample, x_sample, mode='reverse_reverse'))
+                                        all_dataset_data['points'].append(jnp.array(x_sample).flatten())
+                                    
+                                    all_dataset_data['f_values'].append(f_x)
+                                    all_dataset_data['lap_values'].append(lap_value)
+                                    all_dataset_data['bih_values'].append(bih_value)
+                                    all_dataset_data['model_info'].append({
+                                        'model': model_name,
+                                        'input_dim': input_dim,
+                                        'hidden_dim': hidden_dim,
+                                        'num_layers': num_layers,
+                                        'activation': activation,
+                                        'precision': precision
                                     })
-                                return out
 
-                            lap_final = aggregate(lap_runs)
-                            bih_final = aggregate(bih_runs)
+                                # 多次运行取均值
+                                lap_runs, bih_runs = [], []
+                                for _ in range(NUM_RUNS):
+                                    manual_seed(42)
+                                    model = build_model(model_name, input_dim, hidden_dim, num_layers, activation)
+                                    x = randn((1, input_dim), dtype)  # 添加 input_dim
 
-                            # 附加公共字段
-                            for r in lap_final + bih_final:
-                                r.update({
-                                    'model': model_name,
-                                    'input_dim': input_dim,
-                                    'hidden_dim': hidden_dim,
-                                    'num_layers': num_layers,
-                                    'activation': activation,
-                                    'precision': precision,
-                                })
-                                results.append(r)
+                                    lap_runs.extend(evaluate_single_config(
+                                        model, x, operator='laplacian', dtype=dtype, 
+                                        framework_name=framework_name,
+                                        laplacian_operator=laplacian_operator,
+                                        biharmonic_operator=biharmonic_operator
+                                    ))
+                                    # 重新构建模型与 x，避免计算图残留与缓存影响
+                                    model = build_model(model_name, input_dim, hidden_dim, num_layers, activation)
+                                    x = randn((1, input_dim), dtype)  # 修复：添加 input_dim
+                                    bih_runs.extend(evaluate_single_config(
+                                        model, x, operator='biharmonic', dtype=dtype,
+                                        framework_name=framework_name,
+                                        laplacian_operator=laplacian_operator,
+                                        biharmonic_operator=biharmonic_operator
+                                    ))
 
-                            total_configs += 1
+                                # 聚合（时间取均值，value/mse 取均值）
+                                def aggregate(run_list):
+                                    from collections import defaultdict
+                                    buckets = defaultdict(list)
+                                    for r in run_list:
+                                        key = (r['operator'], r['mode'])
+                                        buckets[key].append(r)
+                                    out = []
+                                    for (operator, mode), lst in buckets.items():
+                                        avg_time = float(np.mean([z['time'] for z in lst if z['time'] is not None]))
+                                        avg_val = float(np.mean([z['value'] for z in lst if z['value'] is not None])) if any(z['value'] is not None for z in lst) else None
+                                        avg_mse = float(np.mean([z['mse'] for z in lst if z['mse'] is not None])) if any(z['mse'] is not None for z in lst) else None
+                                        bf = float(np.mean([z['baseline_f_time'] for z in lst if z.get('baseline_f_time') is not None]))
+                                        bg = float(np.mean([z['baseline_grad_time'] for z in lst if z.get('baseline_grad_time') is not None]))
+                                        out.append({
+                                            'operator': operator,
+                                            'mode': mode,
+                                            'time': avg_time,
+                                            'value': avg_val,
+                                            'mse': avg_mse,
+                                            'baseline_f_time': bf,
+                                            'baseline_grad_time': bg,
+                                        })
+                                    return out
+
+                                lap_final = aggregate(lap_runs)
+                                bih_final = aggregate(bih_runs)
+
+                                # 附加公共字段
+                                for r in lap_final + bih_final:
+                                    r.update({
+                                        'model': model_name,
+                                        'input_dim': input_dim,
+                                        'hidden_dim': hidden_dim,
+                                        'num_layers': num_layers,
+                                        'activation': activation,
+                                        'precision': precision,
+                                        'framework': framework_name
+                                    })
+                                    all_results.append(r)
+
+                                # total_configs += 1 # This line is removed as total_configs is not defined
 
     if verbose:
-        print(f"\n✓ 完成评估，共测试 {total_configs} 个配置")
-        print(f"✓ 总结果数: {len(results)}")
+        print(f"\n✓ 完成评估，共测试 {len(all_results)} 个配置")
+        print(f"✓ 总结果数: {len(all_results)}")
 
-    return results
+    # 返回结果和数据集
+    if collect_dataset:
+        dataset_data = {
+            'points': all_dataset_data['points'],
+            'f_values': all_dataset_data['f_values'],
+            'lap_values': all_dataset_data['lap_values'],
+            'bih_values': all_dataset_data['bih_values'],
+            'model_info': all_dataset_data['model_info']
+        }
+        return all_results, dataset_data
+    else:
+        return all_results, None
 
 def print_summary(results):
     """打印评估结果摘要"""
@@ -311,47 +603,8 @@ def run_benchmark():
     print("开始性能评估...")
     print("=" * 80)
     
-    # 用于收集数据集
-    dataset_points = []
-    dataset_f_values = []
-    dataset_lap_values = []
-    dataset_bih_values = []
-    dataset_model_info = []
-    
-    # 收集代表性测试点（每个配置一个）
-    def collect_sample_data(model_name, input_dim, hidden_dim, num_layers, activation, precision):
-        """收集单个配置的测试数据"""
-        torch.manual_seed(42)  # 固定随机种子
-        dtype = torch.float32 if precision == 'float32' else torch.float64
-        model = build_model(model_name, input_dim, hidden_dim, num_layers, activation)
-        if dtype == torch.float64:
-            model = model.double()
-        
-        # 生成测试点
-        x = torch.randn(1, input_dim, dtype=dtype, requires_grad=True)
-        
-        # 计算函数值
-        f_x = model(x).item()
-        
-        # 计算算子值（使用基准模式）
-        lap_value = laplacian_operator(model, x.clone(), mode='reverse_reverse').item()
-        bih_value = biharmonic_operator(model, x.clone(), mode='reverse_reverse').item()
-        
-        # 保存
-        dataset_points.append(x.detach().cpu().numpy().flatten())
-        dataset_f_values.append(f_x)
-        dataset_lap_values.append(lap_value)
-        dataset_bih_values.append(bih_value)
-        dataset_model_info.append({
-            'model': model_name,
-            'input_dim': input_dim,
-            'hidden_dim': hidden_dim,
-            'num_layers': num_layers,
-            'activation': activation,
-            'precision': precision
-        })
-    
-    results = evaluate_performance(verbose=True)
+    # 运行评估并收集数据集
+    results, dataset_data = evaluate_performance(verbose=True, collect_dataset=True)
     
     # 打印摘要
     print_summary(results)
@@ -362,13 +615,15 @@ def run_benchmark():
     print("✓ 结果已保存到 results.csv")
     
     # 保存数据集
-    if dataset_points:
+    if dataset_data:
         from utils import save_dataset_npy, save_dataset_csv
         print("\n保存测试数据集...")
-        save_dataset_npy(dataset_points, dataset_f_values, dataset_lap_values, 
-                        dataset_bih_values, dataset_model_info, 'dataset.npy')
-        save_dataset_csv(dataset_points, dataset_f_values, dataset_lap_values,
-                       dataset_bih_values, dataset_model_info, 'dataset.csv')
+        save_dataset_npy(dataset_data['points'], dataset_data['f_values'], 
+                        dataset_data['lap_values'], dataset_data['bih_values'],
+                        dataset_data['model_info'], 'dataset.npy')
+        save_dataset_csv(dataset_data['points'], dataset_data['f_values'],
+                       dataset_data['lap_values'], dataset_data['bih_values'],
+                       dataset_data['model_info'], 'dataset.csv')
         print("✓ 数据集已保存")
     
     # 绘制图表

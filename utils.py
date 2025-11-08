@@ -166,13 +166,13 @@ def save_dataset_csv(test_points, function_values, laplacian_values, biharmonic_
     import csv
     import numpy as np
     
-    test_points = np.asarray(test_points)
+    # 不要尝试将 test_points 转换为数组，直接使用列表
     function_values = np.asarray(function_values)
     laplacian_values = np.asarray(laplacian_values)
     biharmonic_values = np.asarray(biharmonic_values)
     
     # 找到最大维度，统一字段名
-    max_dim = max([len(pt) for pt in test_points]) if len(test_points) > 0 else 0
+    max_dim = max([len(np.array(pt).flatten()) for pt in test_points]) if len(test_points) > 0 else 0
     
     with open(filename, 'w', newline='') as csvfile:
         # 构建字段名：x_0, x_1, ..., x_max_dim, f(x), laplacian, biharmonic, model, input_dim, ...
@@ -184,7 +184,8 @@ def save_dataset_csv(test_points, function_values, laplacian_values, biharmonic_
         for i in range(len(test_points)):
             row = {}
             # 填充x坐标（不足的用空值）
-            pt = test_points[i]
+            pt = np.array(test_points[i]).flatten()  # 确保是1D数组
+            
             for j in range(max_dim):
                 row[f'x_{j}'] = pt[j] if j < len(pt) else ''
             

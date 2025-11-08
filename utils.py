@@ -129,21 +129,32 @@ def save_dataset_npy(test_points, function_values, laplacian_values, biharmonic_
     保存测试数据集为.npy格式
     
     Args:
-        test_points: 测试点坐标 (numpy array, shape: [n_samples, input_dim])
+        test_points: 测试点坐标 (list of arrays, 每个元素长度可能不同)
         function_values: 函数值 (numpy array, shape: [n_samples])
         laplacian_values: 拉普拉斯算子值 (numpy array, shape: [n_samples])
         biharmonic_values: 双调和算子值 (numpy array, shape: [n_samples])
         model_info: 模型信息列表（每个采样点对应的模型配置）
         filename: 保存文件名
     """
+    # 将 test_points 转换为对象数组（因为不同配置的 input_dim 不同）
+    # 确保每个元素都是 numpy 数组
+    test_points_arrays = []
+    for pt in test_points:
+        if isinstance(pt, np.ndarray):
+            test_points_arrays.append(pt)
+        else:
+            test_points_arrays.append(np.array(pt))
+    
+    test_points_array = np.array(test_points_arrays, dtype=object)
+    
     dataset = {
-        'test_points': np.array(test_points),
+        'test_points': test_points_array,  # 使用对象数组
         'function_values': np.array(function_values),
         'laplacian_values': np.array(laplacian_values),
         'biharmonic_values': np.array(biharmonic_values),
         'model_info': model_info
     }
-    np.save(filename, dataset)
+    np.save(filename, dataset, allow_pickle=True)  # 需要 allow_pickle=True 来保存对象数组
     print(f"数据集已保存到 {filename}")
 
 def save_dataset_csv(test_points, function_values, laplacian_values, biharmonic_values,

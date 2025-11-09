@@ -232,19 +232,14 @@ def evaluate_performance(frameworks=None, verbose=True, collect_dataset=True):
     
     Returns:
         results: 所有评估结果的列表（包含framework字段）
-        dataset_data: 数据集信息（如果collect_dataset=True）
+        dataset_data_by_framework: 按框架分组的数据集字典 {framework_name: dataset_data}
     """
     if frameworks is None:
         frameworks = CURRENT_FRAMEWORKS
     
     all_results = []
-    all_dataset_data = {
-        'points': [],
-        'f_values': [],
-        'lap_values': [],
-        'bih_values': [],
-        'model_info': []
-    }
+    # 修改：按框架分组保存数据集
+    dataset_data_by_framework = {}
     
     # 对每个框架分别评估
     for framework_name in frameworks:
@@ -342,6 +337,15 @@ def evaluate_performance(frameworks=None, verbose=True, collect_dataset=True):
                 else:
                     raise ValueError(f"Unknown model: {model_name}")
 
+        # 修改：为每个框架单独收集数据集
+        framework_dataset_data = {
+            'points': [],
+            'f_values': [],
+            'lap_values': [],
+            'bih_values': [],
+            'model_info': []
+        }
+
         for model_name in ['MLP', 'ResNet']:
             for input_dim in test_configs['input_dims']:
                 for hidden_dim in test_configs['hidden_dims']:
@@ -388,24 +392,24 @@ def evaluate_performance(frameworks=None, verbose=True, collect_dataset=True):
                                         f_x = model_sample(x_sample).item()
                                         lap_value = laplacian_operator(model_sample, x_sample.clone(), mode='reverse_reverse').item()
                                         bih_value = biharmonic_operator(model_sample, x_sample.clone(), mode='reverse_reverse').item()
-                                        all_dataset_data['points'].append(x_sample.detach().cpu().numpy().flatten())
+                                        framework_dataset_data['points'].append(x_sample.detach().cpu().numpy().flatten())
                                     elif framework_name == 'tensorflow':
                                         import tensorflow as tf
                                         f_x = float(tf.reduce_sum(model_sample(x_sample)).numpy())
                                         lap_value = float(laplacian_operator(model_sample, tf.Variable(x_sample), mode='reverse_reverse').numpy())
                                         bih_value = float(biharmonic_operator(model_sample, tf.Variable(x_sample), mode='reverse_reverse').numpy())
-                                        all_dataset_data['points'].append(x_sample.numpy().flatten())
+                                        framework_dataset_data['points'].append(x_sample.numpy().flatten())
                                     elif framework_name == 'jax':
                                         import jax.numpy as jnp
                                         f_x = float(jnp.sum(model_sample(x_sample)))
                                         lap_value = float(laplacian_operator(model_sample, x_sample, mode='reverse_reverse'))
                                         bih_value = float(biharmonic_operator(model_sample, x_sample, mode='reverse_reverse'))
-                                        all_dataset_data['points'].append(jnp.array(x_sample).flatten())
+                                        framework_dataset_data['points'].append(jnp.array(x_sample).flatten())
                                     
-                                    all_dataset_data['f_values'].append(f_x)
-                                    all_dataset_data['lap_values'].append(lap_value)
-                                    all_dataset_data['bih_values'].append(bih_value)
-                                    all_dataset_data['model_info'].append({
+                                    framework_dataset_data['f_values'].append(f_x)
+                                    framework_dataset_data['lap_values'].append(lap_value)
+                                    framework_dataset_data['bih_values'].append(bih_value)
+                                    framework_dataset_data['model_info'].append({
                                         'model': model_name,
                                         'input_dim': input_dim,
                                         'hidden_dim': hidden_dim,
@@ -478,24 +482,23 @@ def evaluate_performance(frameworks=None, verbose=True, collect_dataset=True):
                                     })
                                     all_results.append(r)
 
-                                # total_configs += 1 # This line is removed as total_configs is not defined
+        # 修改：保存每个框架的数据集
+        if collect_dataset and framework_dataset_data['points']:
+            dataset_data_by_framework[framework_name] = {
+                'points': framework_dataset_data['points'],
+                'f_values': framework_dataset_data['f_values'],
+                'lap_values': framework_dataset_data['lap_values'],
+                'bih_values': framework_dataset_data['bih_values'],
+                'model_info': framework_dataset_data['model_info']
+            }
 
     if verbose:
         print(f"\n✓ 完成评估，共测试 {len(all_results)} 个配置")
         print(f"✓ 总结果数: {len(all_results)}")
 
-    # 返回结果和数据集
-    if collect_dataset:
-        dataset_data = {
-            'points': all_dataset_data['points'],
-            'f_values': all_dataset_data['f_values'],
-            'lap_values': all_dataset_data['lap_values'],
-            'bih_values': all_dataset_data['bih_values'],
-            'model_info': all_dataset_data['model_info']
-        }
-        return all_results, dataset_data
-    else:
-        return all_results, None
+    # 返回结果和按框架分组的数据集
+    return all_results, dataset_data_by_framework if collect_dataset else None
+
 
 def print_summary(results):
     """打印评估结果摘要"""
@@ -604,29 +607,70 @@ def run_benchmark():
     print("=" * 80)
     
     # 运行评估并收集数据集
-    results, dataset_data = evaluate_performance(verbose=True, collect_dataset=True)
+    results, dataset_data_by_framework = evaluate_performance(verbose=True, collect_dataset=True)
     
     # 打印摘要
     print_summary(results)
     
-    # 保存结果
-    print("\n保存结果到 CSV 文件...")
-    save_results_to_csv(results, "results.csv")
-    print("✓ 结果已保存到 results.csv")
-    
-    # 保存数据集
-    if dataset_data:
+    # 修改：按框架分别保存结果和数据集
+    if dataset_data_by_framework:
         from utils import save_dataset_npy, save_dataset_csv
-        print("\n保存测试数据集...")
-        save_dataset_npy(dataset_data['points'], dataset_data['f_values'], 
-                        dataset_data['lap_values'], dataset_data['bih_values'],
-                        dataset_data['model_info'], 'dataset.npy')
-        save_dataset_csv(dataset_data['points'], dataset_data['f_values'],
-                       dataset_data['lap_values'], dataset_data['bih_values'],
-                       dataset_data['model_info'], 'dataset.csv')
-        print("✓ 数据集已保存")
+        
+        # 获取所有测试的框架
+        frameworks = list(dataset_data_by_framework.keys())
+        
+        # 按框架分组结果
+        results_by_framework = {}
+        for r in results:
+            framework = r.get('framework', 'unknown')
+            if framework not in results_by_framework:
+                results_by_framework[framework] = []
+            results_by_framework[framework].append(r)
+        
+        # 为每个框架分别保存
+        for framework_name in frameworks:
+            print(f"\n保存 {framework_name.upper()} 框架的结果...")
+            
+            # 保存结果 CSV
+            if framework_name in results_by_framework:
+                results_csv_filename = f"{framework_name}_results.csv"
+                save_results_to_csv(results_by_framework[framework_name], results_csv_filename)
+                print(f"✓ 结果已保存到 {results_csv_filename}")
+            
+            # 保存数据集
+            if framework_name in dataset_data_by_framework:
+                dataset_npy_filename = f"{framework_name}_dataset.npy"
+                dataset_csv_filename = f"{framework_name}_dataset.csv"
+                
+                dataset_data = dataset_data_by_framework[framework_name]
+                save_dataset_npy(dataset_data['points'], dataset_data['f_values'], 
+                                dataset_data['lap_values'], dataset_data['bih_values'],
+                                dataset_data['model_info'], dataset_npy_filename)
+                save_dataset_csv(dataset_data['points'], dataset_data['f_values'],
+                               dataset_data['lap_values'], dataset_data['bih_values'],
+                               dataset_data['model_info'], dataset_csv_filename)
+                print(f"✓ 数据集已保存到 {dataset_npy_filename} 和 {dataset_csv_filename}")
+        
+        # 如果只有一个框架，也保存通用名称（向后兼容）
+        if len(frameworks) == 1:
+            framework_name = frameworks[0]
+            print(f"\n同时保存通用文件名（向后兼容）...")
+            save_results_to_csv(results, "results.csv")
+            if framework_name in dataset_data_by_framework:
+                dataset_data = dataset_data_by_framework[framework_name]
+                save_dataset_npy(dataset_data['points'], dataset_data['f_values'], 
+                                dataset_data['lap_values'], dataset_data['bih_values'],
+                                dataset_data['model_info'], 'dataset.npy')
+                save_dataset_csv(dataset_data['points'], dataset_data['f_values'],
+                               dataset_data['lap_values'], dataset_data['bih_values'],
+                               dataset_data['model_info'], 'dataset.csv')
+    else:
+        # 如果没有数据集，只保存结果
+        print("\n保存结果到 CSV 文件...")
+        save_results_to_csv(results, "results.csv")
+        print("✓ 结果已保存到 results.csv")
     
-    # 绘制图表
+    # 绘制图表（可以按框架分别绘制，或者绘制所有框架的对比图）
     print("\n生成性能图表...")
     plot_performance(results)
     print("✓ 图表已保存到 performance_plot.png")

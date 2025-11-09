@@ -23,10 +23,10 @@ def plot_performance(results, output_filename='performance_tf.png'):
     """Plot performance metrics"""
     modes = ["reverse_reverse", "reverse_forward", "forward_forward", "forward_reverse"]
 
-    plt.figure(figsize=(15, 5))
+    plt.figure(figsize=(10, 5)) # chaned from 15,5, becasue only two left
 
     # Subplot 1: computation time vs input dim
-    plt.subplot(1, 3, 1)
+    plt.subplot(1, 2, 1) # again changed from 131
     for mode in modes:
         mode_results = [r for r in results if r.get('mode') == mode and r.get('operator') == 'laplacian']
         if mode_results:
@@ -39,30 +39,30 @@ def plot_performance(results, output_filename='performance_tf.png'):
     plt.legend()
     plt.grid(True)
 
-    # Subplot 2: MSE vs mode
-    plt.subplot(1, 3, 2)
-    mode_mses = {}
-    for mode in modes[1:]:
-        mode_results = [r for r in results
-                        if r.get('mode') == mode
-                        and r.get('operator') == 'laplacian'
-                        and r.get('mse') is not None]
-        if mode_results:
-            mses = [r['mse'] for r in mode_results]
-            mode_mses[mode] = np.mean(mses)
-
-    if mode_mses:
-        modes_list = list(mode_mses.keys())
-        mse_values = [mode_mses[m] for m in modes_list]
-        plt.bar(modes_list, mse_values)
-        plt.yscale('log')
-        plt.ylabel('Mean Squared Error (log)')
-        plt.xlabel('AD Mode')
-        plt.title('MSE vs AD Mode (relative to reverse_reverse)')
-        plt.grid(True, axis='y')
+    ##### Subplot 2: MSE vs mode, not for tf becasue we only have "one" mode
+    # plt.subplot(1, 3, 2)
+    # mode_mses = {}
+    # for mode in modes[1:]:
+    #     mode_results = [r for r in results
+    #                     if r.get('mode') == mode
+    #                     and r.get('operator') == 'laplacian'
+    #                     and r.get('mse') is not None]
+    #     if mode_results:
+    #         mses = [r['mse'] for r in mode_results]
+    #         mode_mses[mode] = np.mean(mses)
+    #
+    # if mode_mses:
+    #     modes_list = list(mode_mses.keys())
+    #     mse_values = [mode_mses[m] for m in modes_list]
+    #     plt.bar(modes_list, mse_values)
+    #     plt.yscale('log')
+    #     plt.ylabel('Mean Squared Error (log)')
+    #     plt.xlabel('AD Mode')
+    #     plt.title('MSE vs AD Mode (relative to reverse_reverse)')
+    #     plt.grid(True, axis='y')
 
     # Subplot 3: average time vs mode
-    plt.subplot(1, 3, 3)
+    plt.subplot(1, 2, 2) # changed from  133
     mode_times = {}
     for mode in modes:
         mode_results = [r for r in results if r.get('mode') == mode and r.get('operator') == 'laplacian']
@@ -80,4 +80,5 @@ def plot_performance(results, output_filename='performance_tf.png'):
 
     plt.tight_layout()
     plt.savefig(output_filename, dpi=150)
-    plt.show()
+    #plt.show()
+    plt.close('all') # so that the code has a nice exit

@@ -1,7 +1,5 @@
-# ============================================================
 # TensorFlow versions of MLP and ResNet architecture
 # These mimic the PyTorch models (models.py) but use tf.keras
-# ============================================================
 
 import tensorflow as tf
 

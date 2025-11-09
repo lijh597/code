@@ -1,144 +1,137 @@
 """
 compare_frameworks.py
-Load PyTorch results (results.csv) and TensorFlow results (results_tf.csv),
-combine them, save combined CSV, and draw comparison plots.
+Compares PyTorch, TensorFlow, and JAX evaluation results.
 
-Usage:
-    python compare_frameworks.py
-Outputs:
-    - results_combined.csv
-    - compare_time_by_input_dim.png
-    - compare_time_by_mode.png
-    - compare_mse_by_mode.png
+Generates:
+- comparison_time_vs_mode.png
+- comparison_laplacian_time_vs_input.png
+
+Notes:
+- TensorFlow has only one AD mode (reverse_reverse),
+  so MSE comparison is skipped.
+- All CSVs must exist in the same folder:
+    results_torch.csv
+    results_tf.csv
+    results_jax.csv
 """
 
 import os
-import sys
-import pandas as pd
+import csv
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Filenames expected
-TORCH_CSV = "results.csv"
-TF_CSV = "results_tf.csv"
-OUT_CSV = "results_combined.csv"
+# ---------- Utility functions ----------
 
-def load_if_exists(fname, framework_label):
-    if not os.path.exists(fname):
-        print(f"⚠ file {fname} not found, skipping {framework_label}.")
-        return pd.DataFrame()
-    df = pd.read_csv(fname)
-    if 'framework' not in df.columns:
-        df['framework'] = framework_label
-    return df
+def load_results(filename, framework_name):
+    """Load results CSV for one framework."""
+    if not os.path.exists(filename):
+        print(f"⚠ Missing {filename}, skipping.")
+        return []
+    data = []
+    with open(filename, newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                r = {
+                    "framework": framework_name,
+                    "operator": row.get("operator", ""),
+                    "mode": row.get("mode", ""),
+                    "input_dim": int(float(row.get("input_dim", 0))),
+                    "time": float(row.get("time", 0.0)),
+                    "mse": float(row.get("mse", 0.0)) if row.get("mse") else None,
+                }
+                data.append(r)
+            except Exception as e:
+                print(f"⚠ Skipping line in {framework_name}: {e}")
+    print(f"✓ Loaded {len(data)} entries from {filename}")
+    return data
 
-def combine_and_save():
-    # Load both (if present)
-    df_torch = load_if_exists(TORCH_CSV, 'pytorch')
-    df_tf = load_if_exists(TF_CSV, 'tensorflow')
 
-    if df_torch.empty and df_tf.empty:
-        print("No input CSV files found (results.csv or results_tf.csv). Nothing to do.")
-        return None
+def aggregate_average(data, operator="laplacian"):
+    """Group by framework + mode and compute average time and mse."""
+    from collections import defaultdict
+    buckets = defaultdict(list)
+    for r in data:
+        if r["operator"] == operator:
+            buckets[(r["framework"], r["mode"])].append(r)
+    summary = []
+    for (fw, mode), lst in buckets.items():
+        times = [x["time"] for x in lst if x["time"] > 0]
+        mses = [x["mse"] for x in lst if x["mse"] is not None]
+        avg_time = np.mean(times) if times else 0
+        avg_mse = np.mean(mses) if mses else 0
+        summary.append({"framework": fw, "mode": mode, "avg_time": avg_time, "avg_mse": avg_mse})
+    return summary
 
-    df = pd.concat([df_torch, df_tf], ignore_index=True, sort=False)
 
-    # Try to normalize some columns (e.g., ensure numeric types)
-    for col in ['input_dim', 'hidden_dim', 'num_layers', 'time', 'value', 'mse']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+def aggregate_time_vs_input(data, operator="laplacian"):
+    """Compute average computation time vs input dimension."""
+    from collections import defaultdict
+    buckets = defaultdict(list)
+    for r in data:
+        if r["operator"] == operator:
+            buckets[(r["framework"], r["input_dim"])].append(r)
+    summary = []
+    for (fw, dim), lst in buckets.items():
+        times = [x["time"] for x in lst]
+        avg_time = np.mean(times)
+        summary.append({"framework": fw, "input_dim": dim, "avg_time": avg_time})
+    return summary
 
-    df.to_csv(OUT_CSV, index=False)
-    print(f"Combined results saved to {OUT_CSV}")
-    return df
 
-def plot_time_by_input_dim(df, output="compare_time_by_input_dim.png"):
-    """
-    Plot computation time vs input dimension for Laplacian,
-    grouped by framework & mode (one plot).
-    """
-    df_plot = df[(df['operator'] == 'laplacian') & df['time'].notna()]
-    if df_plot.empty:
-        print("No laplacian timing data found to plot.")
-        return
+# ---------- Main comparison plotting ----------
 
-    # Plot settings
-    plt.figure(figsize=(10,6))
-    markers = {'pytorch':'o', 'tensorflow':'s'}
-    modes = df_plot['mode'].unique()
-    frameworks = df_plot['framework'].unique()
+def plot_comparisons():
+    # Load all data
+    torch_data = load_results("results_torch.csv", "torch")
+    tf_data = load_results("results_tf.csv", "tensorflow")
+    jax_data = load_results("results_jax.csv", "jax")
 
-    for framework in frameworks:
-        for mode in modes:
-            subset = df_plot[(df_plot['framework']==framework) & (df_plot['mode']==mode)]
-            if subset.empty:
-                continue
-            # group by input_dim mean
-            grp = subset.groupby('input_dim')['time'].mean().reset_index()
-            plt.plot(grp['input_dim'], grp['time'], marker=markers.get(framework,'o'),
-                     label=f"{framework} | {mode}")
+    all_data = torch_data + tf_data + jax_data
 
-    plt.xlabel('Input dimension')
-    plt.ylabel('Mean computation time (s)')
-    plt.title('Laplacian time vs input dim (by framework & AD mode)')
-    plt.legend(fontsize='small', ncol=2)
+    # 1️⃣ Average time vs AD mode (skip tf missing modes)
+    summary = aggregate_average(all_data, operator="laplacian")
+    plt.figure(figsize=(8, 5))
+    frameworks = sorted(list(set([r["framework"] for r in summary])))
+
+    for fw in frameworks:
+        if fw == "tensorflow":
+            # Only one mode; skip or mark differently
+            tf_times = [r["avg_time"] for r in summary if r["framework"] == fw]
+            tf_modes = [r["mode"] for r in summary if r["framework"] == fw]
+            plt.bar([f"{fw}_{m}" for m in tf_modes], tf_times, label=fw)
+        else:
+            modes = [r["mode"] for r in summary if r["framework"] == fw]
+            times = [r["avg_time"] for r in summary if r["framework"] == fw]
+            plt.plot(modes, times, 'o-', label=fw)
+
+    plt.title("Average Laplacian Time vs AD Mode")
+    plt.xlabel("AD Mode")
+    plt.ylabel("Mean Computation Time (s)")
+    plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(output, dpi=150)
+    plt.savefig("comparison_time_vs_mode.png", dpi=150)
     plt.close()
-    print(f"Saved {output}")
 
-def plot_time_by_mode(df, output="compare_time_by_mode.png"):
-    """
-    Bar chart: average time per mode, separate bars for frameworks.
-    """
-    df_plot = df[(df['operator'] == 'laplacian') & df['time'].notna()]
-    if df_plot.empty:
-        print("No laplacian timing data found to plot.")
-        return
-
-    summary = df_plot.groupby(['framework','mode'])['time'].mean().unstack(level=0)
-    summary = summary.fillna(0)
-
-    summary.plot(kind='bar', figsize=(10,6))
-    plt.ylabel('Mean computation time (s)')
-    plt.title('Average Time by AD Mode (per framework)')
-    plt.grid(axis='y')
+    # 2️⃣ Laplacian time vs input dimension
+    summary2 = aggregate_time_vs_input(all_data, operator="laplacian")
+    plt.figure(figsize=(8, 5))
+    for fw in frameworks:
+        dims = [r["input_dim"] for r in summary2 if r["framework"] == fw]
+        times = [r["avg_time"] for r in summary2 if r["framework"] == fw]
+        plt.plot(dims, times, 'o-', label=fw)
+    plt.title("Laplacian: Time vs Input Dimension")
+    plt.xlabel("Input Dimension")
+    plt.ylabel("Mean Computation Time (s)")
+    plt.legend()
+    plt.grid(True)
     plt.tight_layout()
-    plt.savefig(output, dpi=150)
+    plt.savefig("comparison_laplacian_time_vs_input.png", dpi=150)
     plt.close()
-    print(f"Saved {output}")
 
-def plot_mse_by_mode(df, output="compare_mse_by_mode.png"):
-    """
-    Bar chart: average MSE per mode (relative to baseline), compare frameworks
-    """
-    df_plot = df[(df['operator'] == 'laplacian') & df['mse'].notna()]
-    if df_plot.empty:
-        print("No MSE data found to plot.")
-        return
+    print("✓ Comparison plots saved: comparison_time_vs_mode.png, comparison_laplacian_time_vs_input.png")
 
-    summary = df_plot.groupby(['framework','mode'])['mse'].mean().unstack(level=0)
-    summary = summary.fillna(0)
-
-    summary.plot(kind='bar', figsize=(10,6))
-    plt.ylabel('Mean Squared Error')
-    plt.title('Average MSE by AD Mode (per framework)')
-    plt.yscale('log')  # MSEs typically vary orders of magnitude
-    plt.grid(axis='y')
-    plt.tight_layout()
-    plt.savefig(output, dpi=150)
-    plt.close()
-    print(f"Saved {output}")
-
-def main():
-    df = combine_and_save()
-    if df is None:
-        return
-    plot_time_by_input_dim(df)
-    plot_time_by_mode(df)
-    plot_mse_by_mode(df)
-    print("All comparison plots saved.")
 
 if __name__ == "__main__":
-    main()
+    plot_comparisons()

@@ -358,8 +358,8 @@ def run_benchmark():
     
     # 保存结果
     print("\n保存结果到 CSV 文件...")
-    save_results_to_csv(results, "results.csv")
-    print("✓ 结果已保存到 results.csv")
+    save_results_to_csv(results, "results_torch.csv")
+    print("✓ 结果已保存到 results_torch.csv")
     
     # 保存数据集
     if dataset_points:

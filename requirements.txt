@@ -1,0 +1,14 @@
+# 基础依赖
+numpy>=1.21.0
+matplotlib>=3.5.0
+
+# PyTorch
+torch>=2.0.0
+
+# TensorFlow
+tensorflow>=2.13.0
+
+# JAX
+jax>=0.4.0
+jaxlib>=0.4.0
+flax>=0.7.0

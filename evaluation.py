@@ -650,31 +650,16 @@ def run_benchmark():
                                dataset_data['lap_values'], dataset_data['bih_values'],
                                dataset_data['model_info'], dataset_csv_filename)
                 print(f"✓ 数据集已保存到 {dataset_npy_filename} 和 {dataset_csv_filename}")
-        
-        # 如果只有一个框架，也保存通用名称（向后兼容）
-        if len(frameworks) == 1:
-            framework_name = frameworks[0]
-            print(f"\n同时保存通用文件名（向后兼容）...")
-            save_results_to_csv(results, "results.csv")
-            if framework_name in dataset_data_by_framework:
-                dataset_data = dataset_data_by_framework[framework_name]
-                save_dataset_npy(dataset_data['points'], dataset_data['f_values'], 
-                                dataset_data['lap_values'], dataset_data['bih_values'],
-                                dataset_data['model_info'], 'dataset.npy')
-                save_dataset_csv(dataset_data['points'], dataset_data['f_values'],
-                               dataset_data['lap_values'], dataset_data['bih_values'],
-                               dataset_data['model_info'], 'dataset.csv')
-    else:
-        # 如果没有数据集，只保存结果
-        print("\n保存结果到 CSV 文件...")
-        save_results_to_csv(results, "results.csv")
-        print("✓ 结果已保存到 results.csv")
+
+    # 按框架分别绘图（文件名使用前缀）
+    from utils import plot_performance
+    for framework_name, fw_results in results_by_framework.items():
+        fig_name = f"{framework_name}_performance_plot.png"
+        print(f"\n生成 {framework_name.upper()} 框架性能图表...")
+        plot_performance(fw_results, filename=fig_name)
+        print(f"✓ 图表已保存到 {fig_name}")
     
-    # 绘制图表（可以按框架分别绘制，或者绘制所有框架的对比图）
-    print("\n生成性能图表...")
-    plot_performance(results)
-    print("✓ 图表已保存到 performance_plot.png")
-    
+    # 已按框架分别保存图表
     return results
 
 if __name__ == "__main__":

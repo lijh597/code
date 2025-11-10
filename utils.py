@@ -20,7 +20,7 @@ def save_results_to_csv(results, filename):
                 row[field] = result.get(field, '')
             writer.writerow(row)
 
-def plot_performance(results):
+def plot_performance(results, filename):
     """绘制性能图表"""
     # 提取不同模式的性能数据
     modes = ["reverse_reverse", "reverse_forward", "forward_forward", "forward_reverse"]
@@ -96,7 +96,7 @@ def plot_performance(results):
         plt.grid(True, axis='y')
     
     plt.tight_layout()
-    plt.savefig('performance_plot.png', dpi=150)
+    plt.savefig(filename, dpi=150)
     plt.show()
 
 

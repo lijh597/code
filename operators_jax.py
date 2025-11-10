@@ -5,6 +5,43 @@ import jax
 import jax.numpy as jnp
 from jax import grad, jacfwd, jacrev
 
+
+def laplacian_operator(model, x, mode="reverse_reverse"):
+    x = jnp.asarray(x)          # x 形状: (1, d)
+    xi = x[0]                   # 单个样本向量 (d,)
+
+    def f_single(v):
+        return model(v[None, :]).sum()   # 标量输出
+
+    if mode == "reverse_reverse":
+        H = jax.jacrev(jax.jacrev(f_single))(xi)
+    elif mode == "reverse_forward":
+        H = jax.jacfwd(jax.jacrev(f_single))(xi)
+    elif mode == "forward_forward":
+        H = jax.jacfwd(jax.jacfwd(f_single))(xi)
+    elif mode == "forward_reverse":
+        H = jax.jacrev(jax.jacfwd(f_single))(xi)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+    return jnp.trace(H)
+
+
+def biharmonic_operator(model, x, mode="reverse_reverse"):
+    x = jnp.asarray(x)
+    xi = x[0]
+
+    # 第一次拉普拉斯
+    g = laplacian_operator(model, x, mode=mode)
+
+    # 对 g 再做一次拉普拉斯（使用 RR 提取 Hessian 迹）
+    def g_single(v):
+        return laplacian_operator(model, v[None, :], mode=mode)
+
+    H_g = jax.jacrev(jax.jacrev(g_single))(xi)
+    return jnp.trace(H_g)
+
+'''
 def laplacian_operator(model, x, mode="reverse_reverse"):
     """
     计算拉普拉斯算子 ∇²f = Σᵢ ∂²f/∂xᵢ²
@@ -117,3 +154,4 @@ def biharmonic_operator(model, x, mode="reverse_reverse"):
         biharmonic += hess_i[:, i]
     
     return biharmonic.sum()
+    '''
